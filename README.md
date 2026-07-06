@@ -1,63 +1,160 @@
-# CollabEditing
+# AI-Powered CollabEditing
 
-CollabEditing is a real-time collaborative document editing application where multiple users can work on the same document. Unlike traditional collaborative tools, CollabEditing introduces a unique key-based editing mechanism to manage user access.
+AI-Powered CollabEditing is a real-time collaborative document editing platform where multiple users can work on the same document while leveraging an integrated AI assistant for document understanding. The application combines collaborative editing, secure access control, and Retrieval-Augmented Generation (RAG) to provide contextual document Q&A, summarization, and semantic search.
+
+Unlike traditional collaborative editors, the platform introduces a **key-based editing mechanism**, ensuring only one user can actively edit a document at a time, eliminating edit conflicts while maintaining real-time collaboration.
+
+---
 
 ## Features
-- **Real-Time Collaboration**: Users can edit documents simultaneously, with changes reflected instantly.
-- **Key-Based Editing Control**: Only one user at a time holds the editing key. To edit, a user must receive the key from the current holder.
-- **User Authentication**: Secure login using email and password.
-- **User Management**: Users can be invited via email to collaborate on documents.
-- **Role-Based Access**: Assign different roles like viewer, editor, or owner.
-- **Synchronization via RabbitMQ**: Ensures efficient communication and document updates.
-- **Version Control**: Tracks changes and maintains document history.
-- **Commenting and Chat**: Users can leave comments on documents and chat in real-time.
-- **Document Locking Mechanism**: Prevents conflicts by allowing only one active editor at a time.
-- **Scalable Architecture**: Built using a distributed system approach similar to Google Docs but on a basic scale.
-- **User-Friendly Interface**: Provides an intuitive and seamless editing experience.
+
+### Real-Time Collaboration
+
+* Multiple users can collaborate on the same document with live synchronization.
+* Changes are propagated instantly using RabbitMQ.
+
+### AI-Powered Document Assistant
+
+* Ask questions about uploaded documents using natural language.
+* Generate document summaries.
+* Perform semantic search to quickly locate relevant information.
+* Retrieve context-aware responses using Retrieval-Augmented Generation (RAG).
+
+### Intelligent Document Indexing
+
+* Converts document content into vector embeddings.
+* Stores embeddings in a vector database for efficient semantic retrieval.
+* Automatically updates the document index whenever content changes.
+
+### Key-Based Editing Control
+
+* Only one user holds the editing key at a time.
+* Users request the key from the current editor before making modifications.
+* Prevents simultaneous write conflicts while preserving collaboration.
+
+### User Authentication & Authorization
+
+* JWT-based authentication.
+* Secure login using email and password.
+* Invite collaborators via email.
+* Role-based permissions (Owner, Editor, Viewer).
+* AI responses respect document access permissions.
+
+### Version Management
+
+* Maintains document history.
+* Supports version tracking and rollback.
+
+### Communication
+
+* Real-time comments.
+* In-app chat for collaborators.
+
+### Scalable Backend
+
+* Distributed architecture using Spring Boot and RabbitMQ.
+* Modular backend design for scalability and maintainability.
+
+---
+
+## Tech Stack
+
+| Layer           | Technology                         |
+| --------------- | ---------------------------------- |
+| Frontend        | React                              |
+| Backend         | Spring Boot                        |
+| Database        | MySQL                              |
+| Message Broker  | RabbitMQ                           |
+| Authentication  | JWT                                |
+| AI              | OpenAI/Gemini API                  |
+| RAG             | Vector Embeddings                  |
+| Vector Database | ChromaDB / Pinecone (Configurable) |
+
+---
+
+## Architecture
+
+```
+                    Angular Client
+                          │
+                          ▼
+                  Spring Boot Backend
+          ┌───────────────┼───────────────┐
+          │               │               │
+          ▼               ▼               ▼
+      MySQL          RabbitMQ       OpenAI/Gemini
+          │                               │
+          │                               ▼
+          │                      Vector Database
+          │                      (Embeddings)
+          │
+          ▼
+   Version History &
+   Role-Based Access
+```
+
+---
 
 ## Installation
-1. Clone the repository:
-   ```sh
-   git clone https://github.com/Rahul30604/CollabEditing.git
-   ```
-2. Navigate to the project directory:
-   ```sh
-   cd CollabEditing
-   ```
-3. Install frontend dependencies:
-   ```sh
-   cd frontend
-   npm install
-   ```
-4. Start the frontend:
-   ```sh
-   npm start
-   ```
-5. Install backend dependencies:
-   ```sh
-   cd ../backend
-   mvn install
-   ```
-6. Start the backend:
-   ```sh
-   mvn spring-boot:run
-   ```
 
-## Technologies Used
-- **Frontend**: Angular
-- **Backend**: Spring Boot
-- **Message Broker**: RabbitMQ
-- **Database**: MySQL
-- **Authentication**: JWT-based authentication system
+### Clone the Repository
 
-## Contribution
-Contributions are welcome! Follow these steps:
+```bash
+git clone https://github.com/Rahul30604/CollabEditing.git
+cd CollabEditing
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+### Backend
+
+```bash
+cd ../backend
+mvn clean install
+mvn spring-boot:run
+```
+
+---
+
+## Future Enhancements
+
+* AI-powered document comparison
+* AI-generated meeting notes
+* Context-aware writing assistance
+* Multi-document semantic search
+* AI-assisted code and technical document review
+* OCR support for scanned PDFs
+
+---
+
+## Contributing
+
+Contributions are welcome!
+
 1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature-name`).
-3. Commit your changes (`git commit -m 'Add feature'`).
-4. Push to the branch (`git push origin feature-name`).
+2. Create a feature branch:
+
+   ```bash
+   git checkout -b feature-name
+   ```
+3. Commit your changes:
+
+   ```bash
+   git commit -m "Add feature"
+   ```
+4. Push to your branch:
+
+   ```bash
+   git push origin feature-name
+   ```
 5. Open a Pull Request.
 
-## Contact
-For queries and support, reach out via email at [your-email@example.com](mailto:your-email@example.com).
+---
+
 
