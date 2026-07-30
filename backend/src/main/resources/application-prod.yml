@@ -1,0 +1,53 @@
+# Production Profile
+# Activated via SPRING_PROFILES_ACTIVE=prod
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://mysql:3306/collabeditor?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${SPRING_DATASOURCE_USERNAME:collabuser}
+    password: ${SPRING_DATASOURCE_PASSWORD:collabpass}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: false
+
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    username: ${SPRING_RABBITMQ_USERNAME:collabuser}
+    password: ${SPRING_RABBITMQ_PASSWORD:collabpass}
+
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+
+server:
+  error:
+    include-stacktrace: never
+    include-message: never
+
+app:
+  ai:
+    openai:
+      api-key: ${APP_AI_OPENAI_API_KEY}
+  chromadb:
+    base-url: ${APP_AI_CHROMADB_BASE_URL:http://chromadb:8000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics
+
+logging:
+  level:
+    com.collabeditor: INFO
+    org.springframework: WARN
+    org.hibernate: WARN

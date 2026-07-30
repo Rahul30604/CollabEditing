@@ -1,0 +1,78 @@
+spring:
+  application:
+    name: collabeditor-backend
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/collabeditor?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: collabuser
+    password: collabpass
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: collabuser
+    password: collabpass
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 5000
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 600000
+      cache-null-values: false
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: collabeditor
+
+app:
+  jwt:
+    secret: Y29sbGFiZWRpdG9yLXNlY3JldC1rZXktZm9yLWp3dC10b2tlbi1zaWduaW5nLTIwMjQ=
+    expiration-ms: 86400000
+    refresh-expiration-ms: 604800000
+
+  ai:
+    provider: openai  # openai or gemini
+    openai:
+      api-key: ${OPENAI_API_KEY:your-openai-api-key-here}
+      model: gpt-4.1
+      embedding-model: text-embedding-3-small
+      base-url: https://api.openai.com/v1
+    gemini:
+      api-key: ${GEMINI_API_KEY:your-gemini-api-key-here}
+      model: gemini-2.0-flash
+      base-url: https://generativelanguage.googleapis.com/v1beta
+
+  chromadb:
+    base-url: http://localhost:8000
+    collection-name: collabeditor-documents
+
+  embedding:
+    chunk-size: 500
+    chunk-overlap: 100
+    top-k: 5

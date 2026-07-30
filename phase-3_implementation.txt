@@ -1,0 +1,390 @@
+================================================================================
+                    PHASE 3 - IMPLEMENTATION DOCUMENT
+              AI-Powered Collaborative Document Editor
+================================================================================
+
+Date: July 2026
+Status: Complete
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+Phase 3 adds AI-powered intelligence to the platform:
+- Document Q&A using Retrieval-Augmented Generation (RAG)
+- Automatic document summarization
+- Semantic search across all accessible documents
+- Asynchronous embedding pipeline via RabbitMQ
+- ChromaDB vector storage for efficient similarity retrieval
+
+================================================================================
+2. ARCHITECTURE
+================================================================================
+
+    User asks question
+           |
+           v
+    Spring Boot API
+           |
+    +------+------+
+    |             |
+    v             v
+  Embed query   Search ChromaDB
+  (OpenAI)      (vector similarity)
+                      |
+                      v
+                Top K chunks
+                      |
+                      v
+              Build RAG prompt
+                      |
+                      v
+              Call OpenAI GPT-4.1
+                      |
+                      v
+              Return answer + sources
+
+    ----------------------------------------
+
+    Embedding Pipeline (async, on save):
+
+    User saves document
+           |
+           v
+    DocumentService.updateDocument()
+           |
+           v
+    RabbitMQ (embedding.generate)
+           |
+           v
+    EmbeddingConsumer
+           |
+    +------+------+
+    |             |
+    v             v
+  Chunk doc    Generate embeddings
+  (500 words,   (OpenAI text-embedding-3-small)
+   100 overlap)       |
+                      v
+              Store in ChromaDB
+              (upsert, replace old)
+
+================================================================================
+3. NEW INFRASTRUCTURE
+================================================================================
+
+3.1 ChromaDB (Docker Compose)
+--------------------------------------------------------------------------------
+- Image: chromadb/chroma:0.5.0
+- Port: 8000
+- Persistent storage: chroma_data volume
+- Collection: collabeditor-documents
+- Auto-created on application startup
+
+3.2 OpenAI API
+--------------------------------------------------------------------------------
+- Chat model: GPT-4.1
+- Embedding model: text-embedding-3-small (1536 dimensions)
+- API key configured via environment variable OPENAI_API_KEY
+- WebClient-based HTTP calls (non-blocking capable)
+
+================================================================================
+4. EMBEDDING PIPELINE
+================================================================================
+
+4.1 Chunking Strategy
+--------------------------------------------------------------------------------
+- Splits document content by whitespace into words
+- Chunk size: 500 words
+- Overlap: 100 words between consecutive chunks
+- Each chunk gets a unique ID: {documentId}_chunk_{index}
+
+Example for a 1200-word document:
+  Chunk 0: words 0-499
+  Chunk 1: words 400-899
+  Chunk 2: words 800-1199
+
+4.2 Embedding Generation
+--------------------------------------------------------------------------------
+- Uses OpenAI text-embedding-3-small model
+- Batch processing (20 texts per API call)
+- Generates 1536-dimensional vectors per chunk
+
+4.3 ChromaDB Storage
+--------------------------------------------------------------------------------
+- Collection: collabeditor-documents
+- Per chunk stored:
+  - id: "{documentId}_chunk_{index}"
+  - embedding: float[1536]
+  - document: chunk text content
+  - metadata: { document_id, chunk_index, title }
+- On re-index: delete all old chunks for document, then upsert new ones
+- Supports filtered queries (by document_id)
+
+4.4 Async Flow via RabbitMQ
+--------------------------------------------------------------------------------
+- Queue: embedding-generation
+- Routing key: embedding.generate
+- Trigger: every document save (PUT /api/documents/{id})
+- Consumer: EmbeddingConsumer
+- Error handling: logs error, acks message (no DLQ yet)
+- User experience: save returns immediately, embeddings process in background
+
+================================================================================
+5. RAG (RETRIEVAL-AUGMENTED GENERATION)
+================================================================================
+
+5.1 Document Q&A Flow
+--------------------------------------------------------------------------------
+1. User submits question via POST /api/documents/{id}/ask
+2. Question is embedded using text-embedding-3-small
+3. ChromaDB queried with embedding, filtered to document_id
+4. Top 5 most similar chunks retrieved
+5. Context built from chunk texts (joined with separators)
+6. System prompt constructed with document context
+7. OpenAI GPT-4.1 called with system prompt + user question
+8. Response returned with answer + source snippets
+
+System Prompt Template:
+  "You are an AI assistant helping users understand a document.
+   Answer questions based ONLY on the provided document context below.
+   If the answer cannot be found in the context, say so clearly.
+   DOCUMENT CONTEXT: {chunks}"
+
+5.2 Summarization Flow
+--------------------------------------------------------------------------------
+1. User requests summary via POST /api/documents/{id}/summary
+2. A general embedding is created for "summarize this document"
+3. Top 20 chunks retrieved (more content for comprehensive summary)
+4. All chunk texts concatenated
+5. Summarization prompt sent to GPT-4.1
+6. Structured summary returned (overview + key points + details)
+
+5.3 Semantic Search Flow
+--------------------------------------------------------------------------------
+1. User submits query via POST /api/search
+2. Query embedded using text-embedding-3-small
+3. ChromaDB queried across ALL documents (no filter)
+4. Top 10 results retrieved
+5. Results filtered to only accessible documents (permission check)
+6. Returns: documentId, title, snippet, relevanceScore (1 - distance)
+
+================================================================================
+6. API ENDPOINTS
+================================================================================
+
+AI Endpoints:
+  POST /api/documents/{id}/ask       Document Q&A (RAG)
+  POST /api/documents/{id}/summary   Summarize document
+  POST /api/search                   Semantic search (all docs)
+
+Request/Response:
+
+POST /api/documents/{id}/ask
+  Request:  { "question": "What is JWT?" }
+  Response: { "answer": "...", "sources": ["chunk1...", "chunk2..."] }
+
+POST /api/documents/{id}/summary
+  Request:  (empty body)
+  Response: { "answer": "Summary text...", "sources": [] }
+
+POST /api/search
+  Request:  { "query": "deployment steps" }
+  Response: [
+    { "documentId": 1, "title": "...", "snippet": "...", "relevanceScore": 0.85 },
+    ...
+  ]
+
+All endpoints require JWT authentication.
+Document-specific endpoints verify user has access to the document.
+Search endpoint filters results to user's accessible documents.
+
+================================================================================
+7. BACKEND PACKAGE STRUCTURE (NEW)
+================================================================================
+
+ai/
+└── OpenAiClient.java           WebClient calls to OpenAI API
+                                (embeddings + chat completions)
+
+embedding/
+├── ChunkingService.java        Word-based document chunking
+├── DocumentChunk.java          Chunk DTO
+└── EmbeddingService.java       Orchestrates chunk -> embed -> store
+
+vector/
+├── ChromaDbClient.java         ChromaDB REST API client
+└── ChromaQueryResult.java      Query result DTO
+
+rag/
+├── RagService.java             Q&A, summarization, semantic search
+├── AiResponse.java             AI response DTO (answer + sources)
+└── SearchResult.java           Search result DTO
+
+controller/
+└── AiController.java           /ask, /summary, /search endpoints
+
+dto/
+├── AiQuestionRequest.java      Question input
+└── AiSearchRequest.java        Search query input
+
+rabbitmq/
+└── EmbeddingConsumer.java      Listens on embedding queue
+
+================================================================================
+8. FRONTEND PAGES (NEW)
+================================================================================
+
+8.1 AI Assistant (/documents/:id/ai)
+--------------------------------------------------------------------------------
+- Chat-style conversation interface
+- Ask questions about the current document
+- "Summarize Document" quick action button
+- Shows AI responses with source snippets
+- Loading indicator while AI processes
+- Accessible from Editor toolbar (sparkle icon)
+
+8.2 Semantic Search (/search)
+--------------------------------------------------------------------------------
+- Global search accessible from Navbar
+- Natural language query input
+- Results ranked by relevance score
+- Color-coded relevance chips (green/blue/orange)
+- Snippet preview (3-line clamp)
+- Click result navigates to document
+- Empty state and error handling
+
+8.3 Editor Updates
+--------------------------------------------------------------------------------
+- Added AI Assistant button (sparkle icon) in toolbar
+- Navigates to /documents/:id/ai
+
+8.4 Navbar Updates
+--------------------------------------------------------------------------------
+- Added "Search" button with SearchIcon
+- Navigates to /search
+
+================================================================================
+9. CONFIGURATION
+================================================================================
+
+application.yml additions:
+
+  app:
+    ai:
+      provider: openai
+      openai:
+        api-key: ${OPENAI_API_KEY}
+        model: gpt-4.1
+        embedding-model: text-embedding-3-small
+        base-url: https://api.openai.com/v1
+      gemini:
+        api-key: ${GEMINI_API_KEY}
+        model: gemini-2.0-flash
+        base-url: https://generativelanguage.googleapis.com/v1beta
+    chromadb:
+      base-url: http://localhost:8000
+      collection-name: collabeditor-documents
+    embedding:
+      chunk-size: 500
+      chunk-overlap: 100
+      top-k: 5
+
+Environment Variables:
+  OPENAI_API_KEY=sk-...    (required for AI features)
+  GEMINI_API_KEY=...       (optional, for future Gemini support)
+
+================================================================================
+10. HOW TO RUN (UPDATED)
+================================================================================
+
+Prerequisites:
+- Docker Desktop running
+- Java 21 + Maven 3.8+
+- Node.js 18+
+- OpenAI API key
+
+Steps:
+
+1. Set API key:
+   export OPENAI_API_KEY=sk-your-key-here
+
+2. Start infrastructure:
+   docker-compose up -d
+   (Starts MySQL, RabbitMQ, and ChromaDB)
+
+3. Start backend:
+   cd backend
+   mvn spring-boot:run
+
+4. Start frontend:
+   cd frontend
+   npm install
+   npm start
+
+5. Open browser at http://localhost:3000
+
+Services:
+  - App:              http://localhost:3000
+  - API:              http://localhost:8080
+  - RabbitMQ UI:      http://localhost:15672
+  - ChromaDB:         http://localhost:8000
+
+================================================================================
+11. TESTING AI FEATURES
+================================================================================
+
+1. Create a document and add content (at least a paragraph)
+2. Save the document (this triggers async embedding generation)
+3. Wait a few seconds for embeddings to process
+4. Click the AI sparkle icon in the editor toolbar
+5. Ask questions like:
+   - "What is this document about?"
+   - "Explain the main points"
+   - "What does it say about [topic]?"
+6. Click "Summarize Document" for an AI-generated summary
+7. Use the Search page (Navbar) to search across all documents
+
+================================================================================
+12. KNOWN LIMITATIONS
+================================================================================
+
+- Only OpenAI provider implemented (Gemini config present but client not built)
+- No streaming responses (full response returned at once)
+- No conversation memory (each question is independent)
+- No retry logic for OpenAI API failures
+- No rate limiting for AI endpoints
+- ChromaDB has no authentication (suitable for local dev only)
+- Embedding generation can fail silently (logged but not retried)
+- No DLQ for failed embedding messages
+- Large documents may hit OpenAI token limits in summarization
+- No caching of AI responses
+
+================================================================================
+13. COST CONSIDERATIONS
+================================================================================
+
+OpenAI API Costs (approximate):
+- Embedding (text-embedding-3-small): ~$0.02 per 1M tokens
+  A 5000-word document ~ 6500 tokens ~ $0.0001 per index
+- Chat (GPT-4.1): ~$2 per 1M input tokens, $8 per 1M output tokens
+  Each Q&A call ~ $0.005-$0.02 depending on context size
+
+For development/testing: expect < $1/day with moderate usage.
+
+================================================================================
+14. WHAT'S NEXT (PHASE 4)
+================================================================================
+
+- Redis caching (cache AI responses, embeddings)
+- Docker containerization of the full application
+- AWS deployment (ECS/EKS)
+- Monitoring with Grafana/Prometheus
+- Performance optimization
+- Rate limiting for AI endpoints
+- Streaming AI responses
+- Gemini provider implementation
+
+================================================================================
+END OF DOCUMENT
+================================================================================

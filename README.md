@@ -1,110 +1,82 @@
-# AI-Powered CollabEditing
+# AI-Powered Collaborative Document Editor
 
-AI-Powered CollabEditing is a real-time collaborative document editing platform where multiple users can work on the same document while leveraging an integrated AI assistant for document understanding. The application combines collaborative editing, secure access control, and Retrieval-Augmented Generation (RAG) to provide contextual document Q&A, summarization, and semantic search.
-
-Unlike traditional collaborative editors, the platform introduces a **key-based editing mechanism**, ensuring only one user can actively edit a document at a time, eliminating edit conflicts while maintaining real-time collaboration.
-
----
-
-## Features
-
-### Real-Time Collaboration
-
-* Multiple users can collaborate on the same document with live synchronization.
-* Changes are propagated instantly using RabbitMQ.
-
-### AI-Powered Document Assistant
-
-* Ask questions about uploaded documents using natural language.
-* Generate document summaries.
-* Perform semantic search to quickly locate relevant information.
-* Retrieve context-aware responses using Retrieval-Augmented Generation (RAG).
-
-### Intelligent Document Indexing
-
-* Converts document content into vector embeddings.
-* Stores embeddings in a vector database for efficient semantic retrieval.
-* Automatically updates the document index whenever content changes.
-
-### Key-Based Editing Control
-
-* Only one user holds the editing key at a time.
-* Users request the key from the current editor before making modifications.
-* Prevents simultaneous write conflicts while preserving collaboration.
-
-### User Authentication & Authorization
-
-* JWT-based authentication.
-* Secure login using email and password.
-* Invite collaborators via email.
-* Role-based permissions (Owner, Editor, Viewer).
-* AI responses respect document access permissions.
-
-### Version Management
-
-* Maintains document history.
-* Supports version tracking and rollback.
-
-### Communication
-
-* Real-time comments.
-* In-app chat for collaborators.
-
-### Scalable Backend
-
-* Distributed architecture using Spring Boot and RabbitMQ.
-* Modular backend design for scalability and maintainability.
+A real-time collaborative document editing platform with AI-powered document Q&A, built with React and Spring Boot.
 
 ---
 
 ## Tech Stack
 
-| Layer           | Technology                         |
-| --------------- | ---------------------------------- |
-| Frontend        | React                              |
-| Backend         | Spring Boot                        |
-| Database        | MySQL                              |
-| Message Broker  | RabbitMQ                           |
-| Authentication  | JWT                                |
-| AI              | OpenAI/Gemini API                  |
-| RAG             | Vector Embeddings                  |
-| Vector Database | ChromaDB / Pinecone (Configurable) |
+| Layer          | Technology                              |
+| -------------- | --------------------------------------- |
+| Frontend       | React 18, React Router, Material UI     |
+| Backend        | Java 21, Spring Boot 3.2, Spring Security |
+| Database       | MySQL 8.0 (Docker)                      |
+| Authentication | JWT (access + refresh tokens)           |
+| Build Tool     | Maven                                   |
 
 ---
 
-## Architecture
+## Project Structure
 
 ```
-                    Angular Client
-                          │
-                          ▼
-                  Spring Boot Backend
-          ┌───────────────┼───────────────┐
-          │               │               │
-          ▼               ▼               ▼
-      MySQL          RabbitMQ       OpenAI/Gemini
-          │                               │
-          │                               ▼
-          │                      Vector Database
-          │                      (Embeddings)
-          │
-          ▼
-   Version History &
-   Role-Based Access
+CollabEditor/
+├── backend/                    # Spring Boot API
+│   ├── pom.xml
+│   └── src/main/java/com/collabeditor/
+│       ├── config/             # Security config, exception handler
+│       ├── controller/         # REST controllers
+│       ├── dto/                # Request/Response DTOs
+│       ├── entity/             # JPA entities
+│       ├── repository/         # Spring Data JPA repos
+│       ├── security/           # JWT filter, token provider
+│       ├── service/            # Business logic
+│       └── CollabEditorApplication.java
+├── frontend/                   # React SPA
+│   ├── package.json
+│   ├── public/
+│   └── src/
+│       ├── components/         # Reusable UI components
+│       ├── context/            # Auth context
+│       ├── pages/              # Login, Register, Dashboard, Editor
+│       ├── services/           # API service layer
+│       └── utils/              # Theme config
+├── docker-compose.yml          # MySQL service
+└── README.md
 ```
 
 ---
 
-## Installation
+## Prerequisites
 
-### Clone the Repository
+- Java 21
+- Maven 3.8+
+- Node.js 18+
+- Docker & Docker Compose
+
+---
+
+## Getting Started
+
+### 1. Start MySQL
 
 ```bash
-git clone https://github.com/Rahul30604/CollabEditing.git
-cd CollabEditing
+docker-compose up -d
 ```
 
-### Frontend
+This starts MySQL 8.0 on port 3306 with:
+- Database: `collabeditor`
+- User: `collabuser` / Password: `collabpass`
+
+### 2. Start Backend
+
+```bash
+cd backend
+mvn spring-boot:run
+```
+
+The API will be available at `http://localhost:8080`.
+
+### 3. Start Frontend
 
 ```bash
 cd frontend
@@ -112,49 +84,88 @@ npm install
 npm start
 ```
 
-### Backend
-
-```bash
-cd ../backend
-mvn clean install
-mvn spring-boot:run
-```
+The app will be available at `http://localhost:3000`.
 
 ---
 
-## Future Enhancements
+## API Endpoints
 
-* AI-powered document comparison
-* AI-generated meeting notes
-* Context-aware writing assistance
-* Multi-document semantic search
-* AI-assisted code and technical document review
-* OCR support for scanned PDFs
+### Authentication
 
----
+| Method | Endpoint            | Description       | Auth |
+| ------ | ------------------- | ----------------- | ---- |
+| POST   | /api/auth/register  | Register user     | No   |
+| POST   | /api/auth/login     | Login             | No   |
+| GET    | /api/auth/me        | Get current user  | Yes  |
 
-## Contributing
+### Documents
 
-Contributions are welcome!
+| Method | Endpoint              | Description         | Auth |
+| ------ | --------------------- | ------------------- | ---- |
+| POST   | /api/documents        | Create document     | Yes  |
+| GET    | /api/documents        | List my documents   | Yes  |
+| GET    | /api/documents/:id    | Get document        | Yes  |
+| PUT    | /api/documents/:id    | Update document     | Yes  |
+| DELETE | /api/documents/:id    | Delete document     | Yes  |
 
-1. Fork the repository.
-2. Create a feature branch:
+### Sharing
 
-   ```bash
-   git checkout -b feature-name
-   ```
-3. Commit your changes:
-
-   ```bash
-   git commit -m "Add feature"
-   ```
-4. Push to your branch:
-
-   ```bash
-   git push origin feature-name
-   ```
-5. Open a Pull Request.
+| Method | Endpoint                          | Description         | Auth |
+| ------ | --------------------------------- | ------------------- | ---- |
+| POST   | /api/documents/:id/share          | Share document      | Yes  |
+| GET    | /api/documents/:id/share          | List permissions    | Yes  |
+| DELETE | /api/documents/:id/share/:userId  | Remove permission   | Yes  |
 
 ---
 
+## Role-Based Permissions
 
+| Feature     | Owner | Editor | Viewer |
+| ----------- | ----- | ------ | ------ |
+| Edit        | Yes   | Yes    | No     |
+| Delete      | Yes   | No     | No     |
+| Share       | Yes   | No     | No     |
+| View        | Yes   | Yes    | Yes    |
+| AI Q&A      | Yes   | Yes    | Yes    |
+
+---
+
+## Development Phases
+
+### Phase 1 (Current)
+- User authentication (register, login, JWT)
+- Document CRUD
+- Role-based sharing (Owner, Editor, Viewer)
+- React frontend with Material UI
+
+### Phase 2
+- Real-time collaboration (WebSocket)
+- RabbitMQ event handling
+- Key-based editing control
+- Version history
+
+### Phase 3
+- AI integration (OpenAI/Gemini)
+- Embedding generation
+- ChromaDB vector storage
+- Document Q&A, Summarization, Semantic Search
+
+### Phase 4
+- Performance optimization
+- Redis caching
+- Docker containerization
+- AWS deployment
+- Monitoring (Grafana)
+
+---
+
+## Environment Variables
+
+Backend configuration is in `backend/src/main/resources/application.yml`. Key settings:
+
+| Property                    | Default Value   | Description          |
+| --------------------------- | --------------- | -------------------- |
+| server.port                 | 8080            | Backend port         |
+| spring.datasource.url      | localhost:3306  | MySQL connection     |
+| app.jwt.expiration-ms      | 86400000 (24h) | Token expiry         |
+| app.jwt.refresh-expiration-ms | 604800000 (7d) | Refresh token expiry |

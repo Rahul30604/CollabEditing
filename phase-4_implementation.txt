@@ -1,0 +1,438 @@
+================================================================================
+                    PHASE 4 - IMPLEMENTATION DOCUMENT
+              AI-Powered Collaborative Document Editor
+================================================================================
+
+Date: July 2026
+Status: Complete
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+Phase 4 delivers production-readiness:
+- Redis caching for AI responses and document fetches
+- Full Docker containerization (backend + frontend)
+- Production Docker Compose with all services orchestrated
+- Prometheus + Grafana monitoring with pre-built dashboard
+- Environment-based configuration profiles (dev/prod)
+
+================================================================================
+2. REDIS CACHING
+================================================================================
+
+2.1 Infrastructure
+--------------------------------------------------------------------------------
+- Redis 7.2 Alpine (Docker)
+- Port: 6379
+- Persistence: AOF (appendonly yes)
+- Connection: Spring Data Redis
+
+2.2 Cache Configuration
+--------------------------------------------------------------------------------
+Three named caches with different TTLs:
+
+  Cache Name        TTL          Used For
+  ─────────────────────────────────────────
+  ai-responses      30 minutes   Q&A answers, summaries
+  documents         5 minutes    Document fetches
+  search-results    15 minutes   Semantic search results
+
+Serialization: JSON (GenericJackson2JsonRedisSerializer)
+Null values: not cached
+
+2.3 Cache Annotations
+--------------------------------------------------------------------------------
+
+@Cacheable (read-through):
+  - RagService.askQuestion()       -> key: "{docId}:ask:{question}"
+  - RagService.summarizeDocument() -> key: "{docId}:summary"
+  - RagService.semanticSearch()    -> key: "{query}"
+  - DocumentService.getDocument()  -> key: "{docId}:{userId}"
+
+@CacheEvict (invalidation):
+  - DocumentService.updateDocument() -> evicts: documents, ai-responses, search-results
+  - DocumentService.deleteDocument() -> evicts: documents, ai-responses, search-results
+
+2.4 Performance Impact
+--------------------------------------------------------------------------------
+- Repeated AI questions return instantly from cache (no OpenAI call)
+- Document fetches bypass DB for 5 minutes
+- Semantic search results reused for 15 minutes
+- Cache automatically invalidated when document content changes
+
+================================================================================
+3. DOCKER CONTAINERIZATION
+================================================================================
+
+3.1 Backend Dockerfile (multi-stage)
+--------------------------------------------------------------------------------
+
+  Stage 1 - Build:
+    Base: maven:3.9-eclipse-temurin-21
+    - Copy pom.xml, download dependencies (cached layer)
+    - Copy source, build JAR (mvn package -DskipTests)
+
+  Stage 2 - Runtime:
+    Base: eclipse-temurin:21-jre-alpine (~200MB)
+    - Non-root user (appuser:appgroup)
+    - Copy JAR from build stage
+    - Expose port 8080
+    - Entry: java -jar app.jar
+
+3.2 Frontend Dockerfile (multi-stage)
+--------------------------------------------------------------------------------
+
+  Stage 1 - Build:
+    Base: node:18-alpine
+    - Install dependencies (npm install)
+    - Build React app (npm run build)
+    - API URL injected as placeholder at build time
+
+  Stage 2 - Serve:
+    Base: nginx:1.25-alpine (~40MB)
+    - Copy build output to /usr/share/nginx/html
+    - Custom nginx.conf with SPA routing + caching
+    - docker-entrypoint.sh replaces API URL placeholder at runtime
+    - Expose port 80
+
+3.3 Nginx Configuration
+--------------------------------------------------------------------------------
+- SPA routing: try_files -> /index.html
+- Gzip compression for text/js/css/json
+- Static assets: 1 year cache (immutable)
+- index.html: no-cache (always fresh)
+
+================================================================================
+4. PRODUCTION DOCKER COMPOSE
+================================================================================
+
+4.1 File: docker-compose.prod.yml
+--------------------------------------------------------------------------------
+
+Services (8 total):
+  Infrastructure:
+    - mysql (8.0) - Database
+    - rabbitmq (3.13-management) - Message broker
+    - chromadb (0.5.0) - Vector database
+    - redis (7.2-alpine) - Cache
+
+  Application:
+    - backend (custom build) - Spring Boot API
+    - frontend (custom build) - React + Nginx
+
+  Monitoring:
+    - prometheus (v2.51.0) - Metrics collection
+    - grafana (10.4.0) - Dashboards
+
+4.2 Networking
+--------------------------------------------------------------------------------
+- All services on shared bridge network: collabeditor-net
+- Services reference each other by container name
+- Only necessary ports exposed to host:
+  - 80 (frontend)
+  - 8080 (backend API)
+  - 9090 (Prometheus)
+  - 3001 (Grafana)
+
+4.3 Dependency Ordering
+--------------------------------------------------------------------------------
+  backend depends on: mysql (healthy), rabbitmq (healthy), redis (healthy)
+  frontend depends on: backend
+  prometheus depends on: backend
+  grafana depends on: prometheus
+
+4.4 Environment Variables (.env)
+--------------------------------------------------------------------------------
+  MYSQL_ROOT_PASSWORD
+  MYSQL_DATABASE
+  MYSQL_USER
+  MYSQL_PASSWORD
+  RABBITMQ_USER
+  RABBITMQ_PASS
+  OPENAI_API_KEY
+  GEMINI_API_KEY (optional)
+
+4.5 Running Production
+--------------------------------------------------------------------------------
+  # Copy and fill environment variables
+  cp .env.example .env
+  # Edit .env with your values
+
+  # Build and start everything
+  docker-compose -f docker-compose.prod.yml up --build -d
+
+  # View logs
+  docker-compose -f docker-compose.prod.yml logs -f backend
+
+  # Stop
+  docker-compose -f docker-compose.prod.yml down
+
+================================================================================
+5. MONITORING
+================================================================================
+
+5.1 Metrics Endpoint
+--------------------------------------------------------------------------------
+- Spring Boot Actuator + Micrometer Prometheus registry
+- Endpoint: GET /actuator/prometheus
+- Publicly accessible (no JWT required)
+- Tagged with application=collabeditor
+
+5.2 Available Metrics
+--------------------------------------------------------------------------------
+- HTTP request count, duration, errors (by method/uri/status)
+- JVM memory (heap, non-heap, by pool)
+- JVM threads (live, daemon, peak)
+- GC pauses (count, duration)
+- Process CPU usage
+- Cache statistics (hits, misses, puts, evictions)
+- HikariCP connection pool stats
+- RabbitMQ connection/channel metrics
+
+5.3 Prometheus Configuration
+--------------------------------------------------------------------------------
+- Scrape interval: 15 seconds
+- Target: backend:8080/actuator/prometheus
+- Retention: 15 days
+- Port: 9090
+
+5.4 Grafana Dashboard
+--------------------------------------------------------------------------------
+- Auto-provisioned on startup (no manual setup needed)
+- URL: http://localhost:3001
+- Login: admin / admin
+- Pre-built panels:
+  1. Request Rate (req/sec by endpoint)
+  2. Response Time p95 (by endpoint)
+  3. JVM Memory Used (heap/non-heap breakdown)
+  4. JVM Live Threads (stat)
+  5. System CPU Usage (gauge)
+  6. HTTP 5xx Errors (rate)
+  7. Cache Hit Ratio (percentage)
+
+================================================================================
+6. CONFIGURATION PROFILES
+================================================================================
+
+6.1 Profile Structure
+--------------------------------------------------------------------------------
+  application.yml         Base config (shared, used as dev default)
+  application-dev.yml     Development overrides
+  application-prod.yml    Production overrides
+
+6.2 Development Profile (default)
+--------------------------------------------------------------------------------
+- SQL logging enabled (show-sql: true, format_sql: true)
+- DevTools restart enabled
+- DEBUG-level logging for com.collabeditor
+- Connects to localhost services
+- ddl-auto: update (schema auto-migration)
+
+6.3 Production Profile (SPRING_PROFILES_ACTIVE=prod)
+--------------------------------------------------------------------------------
+- All config from environment variables
+- ddl-auto: validate (no schema changes)
+- HikariCP pool: 20 max, 5 min idle
+- No stack traces in error responses
+- WARN-level logging (less noise)
+- Connects to Docker service names (mysql, rabbitmq, redis, chromadb)
+- Actuator: only health, prometheus, metrics exposed
+
+6.4 Activation
+--------------------------------------------------------------------------------
+  Dev (default):
+    cd backend && mvn spring-boot:run
+
+  Prod (Docker):
+    SPRING_PROFILES_ACTIVE=prod (set in docker-compose.prod.yml)
+
+================================================================================
+7. PROJECT STRUCTURE (FINAL)
+================================================================================
+
+CollabEditor/
+├── backend/
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── pom.xml
+│   └── src/main/
+│       ├── java/com/collabeditor/
+│       │   ├── ai/              OpenAI client
+│       │   ├── config/          Security, WebSocket, Redis, AI config
+│       │   ├── controller/      REST controllers (Auth, Doc, Share, AI, Version, Key)
+│       │   ├── dto/             Request/Response DTOs
+│       │   ├── embedding/       Chunking + embedding pipeline
+│       │   ├── entity/          JPA entities
+│       │   ├── rabbitmq/        RabbitMQ config, publishers, consumers
+│       │   ├── rag/             RAG service + DTOs
+│       │   ├── repository/      Spring Data JPA repos
+│       │   ├── security/        JWT auth filter, token provider
+│       │   ├── service/         Business logic
+│       │   ├── vector/          ChromaDB client
+│       │   └── websocket/       WebSocket collaboration
+│       └── resources/
+│           ├── application.yml
+│           ├── application-dev.yml
+│           └── application-prod.yml
+├── frontend/
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── nginx.conf
+│   ├── docker-entrypoint.sh
+│   ├── package.json
+│   ├── public/
+│   └── src/
+│       ├── components/
+│       ├── context/
+│       ├── pages/           Login, Register, Dashboard, Editor,
+│       │                    VersionHistory, AiAssistant, Search
+│       ├── services/
+│       └── utils/
+├── monitoring/
+│   ├── prometheus/
+│   │   └── prometheus.yml
+│   └── grafana/
+│       ├── provisioning/
+│       │   ├── datasources/datasource.yml
+│       │   └── dashboards/dashboard.yml
+│       └── dashboards/
+│           └── collabeditor.json
+├── docker-compose.yml           Dev infrastructure (MySQL, RabbitMQ, ChromaDB, Redis)
+├── docker-compose.prod.yml      Full production stack
+├── .env.example                 Environment variable template
+├── README.md
+├── phase-1_implementation.txt
+├── phase-2_implementation.txt
+├── phase-3_implementation.txt
+└── phase-4_implementation.txt
+
+================================================================================
+8. HOW TO RUN
+================================================================================
+
+8.1 Development Mode
+--------------------------------------------------------------------------------
+  # Start infrastructure only
+  docker-compose up -d
+
+  # Start backend (dev profile, auto-reload)
+  cd backend && mvn spring-boot:run
+
+  # Start frontend (hot reload on port 3000)
+  cd frontend && npm install && npm start
+
+8.2 Production Mode (Docker)
+--------------------------------------------------------------------------------
+  # Setup environment
+  cp .env.example .env
+  # Edit .env: set OPENAI_API_KEY, change passwords
+
+  # Build and launch all services
+  docker-compose -f docker-compose.prod.yml up --build -d
+
+  # Access
+  App:        http://localhost (port 80)
+  API:        http://localhost:8080
+  Grafana:    http://localhost:3001 (admin/admin)
+  Prometheus: http://localhost:9090
+  RabbitMQ:   http://localhost:15672
+
+8.3 Useful Commands
+--------------------------------------------------------------------------------
+  # View logs
+  docker-compose -f docker-compose.prod.yml logs -f backend
+
+  # Restart a service
+  docker-compose -f docker-compose.prod.yml restart backend
+
+  # Scale (not applicable for key-based editing without Redis backend)
+  # docker-compose -f docker-compose.prod.yml up --scale backend=2
+
+  # Remove everything (including volumes)
+  docker-compose -f docker-compose.prod.yml down -v
+
+================================================================================
+9. AWS DEPLOYMENT NOTES
+================================================================================
+
+This setup is AWS-ready. Suggested deployment path:
+
+9.1 Minimal (EC2)
+--------------------------------------------------------------------------------
+- Single EC2 instance (t3.large or bigger)
+- Install Docker + Docker Compose
+- Copy project, set .env, run docker-compose.prod.yml
+- Configure security group: open ports 80, 443
+
+9.2 Recommended (ECS/Fargate)
+--------------------------------------------------------------------------------
+- Push images to ECR (backend, frontend)
+- RDS for MySQL (managed)
+- ElastiCache for Redis (managed)
+- AmazonMQ for RabbitMQ (managed)
+- ECS Fargate tasks for backend + frontend
+- ALB for load balancing + HTTPS
+- CloudWatch for logs
+- ChromaDB on ECS or self-managed EC2
+
+9.3 Production Checklist
+--------------------------------------------------------------------------------
+  [ ] Change all default passwords
+  [ ] Use strong JWT secret (generate with openssl rand -base64 64)
+  [ ] Enable HTTPS (ALB or Nginx certbot)
+  [ ] Set up database backups (RDS automated)
+  [ ] Configure CloudWatch alarms
+  [ ] Set memory limits on containers
+  [ ] Use AWS Secrets Manager for API keys
+  [ ] Set up CI/CD pipeline (GitHub Actions -> ECR -> ECS)
+
+================================================================================
+10. KNOWN LIMITATIONS
+================================================================================
+
+- Single-instance only (editing key is in-memory)
+  -> Fix: move to Redis-backed key management for horizontal scaling
+- No HTTPS in docker-compose (add certbot or use ALB)
+- Grafana has default admin password
+- No log aggregation (add Loki or ship to CloudWatch)
+- No alerting rules configured in Prometheus
+- Frontend API URL baked at build time (workaround via entrypoint)
+- No rate limiting on API endpoints
+- No database migration tool (using ddl-auto, should use Flyway/Liquibase)
+
+================================================================================
+11. COMPLETE FEATURE LIST
+================================================================================
+
+Phase 1: Foundation
+  - JWT authentication (register, login, refresh)
+  - Document CRUD with ownership
+  - Role-based sharing (Owner, Editor, Viewer)
+  - React frontend with Material UI
+
+Phase 2: Collaboration
+  - WebSocket real-time editing (STOMP over SockJS)
+  - Key-based editing control (one editor at a time)
+  - RabbitMQ event-driven architecture
+  - Version history (view, compare, restore)
+  - User presence tracking
+
+Phase 3: AI Intelligence
+  - Document Q&A using RAG
+  - Automatic summarization
+  - Semantic search across documents
+  - Async embedding pipeline
+  - ChromaDB vector storage
+
+Phase 4: Production
+  - Redis caching (AI responses, documents, search)
+  - Docker containerization (backend + frontend)
+  - Production orchestration (docker-compose.prod.yml)
+  - Prometheus metrics + Grafana dashboard
+  - Environment profiles (dev/prod)
+  - AWS deployment ready
+
+================================================================================
+END OF DOCUMENT
+================================================================================

@@ -1,0 +1,383 @@
+================================================================================
+                    PHASE 2 - IMPLEMENTATION DOCUMENT
+              AI-Powered Collaborative Document Editor
+================================================================================
+
+Date: July 2026
+Status: Complete
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+Phase 2 adds real-time collaboration capabilities to the platform:
+- WebSocket-based live document synchronization
+- Key-based editing control (one editor at a time)
+- RabbitMQ event-driven architecture
+- Document version history with restore and compare
+
+================================================================================
+2. NEW INFRASTRUCTURE
+================================================================================
+
+2.1 RabbitMQ (Docker Compose)
+--------------------------------------------------------------------------------
+- Image: rabbitmq:3.13-management
+- AMQP Port: 5672
+- Management UI: http://localhost:15672 (collabuser/collabpass)
+- Purpose: Async event processing for document updates and notifications
+
+2.2 WebSocket (STOMP over SockJS)
+--------------------------------------------------------------------------------
+- Endpoint: ws://localhost:8080/ws (SockJS fallback)
+- Protocol: STOMP 1.2
+- Auth: JWT token passed in CONNECT frame Authorization header
+- Broker: Simple in-memory broker on /topic prefix
+
+================================================================================
+3. KEY-BASED EDITING CONTROL
+================================================================================
+
+3.1 Concept
+--------------------------------------------------------------------------------
+Only one user can actively edit a document at a time. This eliminates
+write conflicts while maintaining real-time collaboration (viewers see
+changes live).
+
+3.2 Workflow
+--------------------------------------------------------------------------------
+
+    User A requests key
+           |
+           v
+    Server checks: is key free?
+           |
+       YES |          NO
+           v           v
+    Key assigned    Added to queue
+    to User A      (position returned)
+           |
+           v
+    User A edits (others are read-only)
+           |
+           v
+    User A releases key (or disconnects)
+           |
+           v
+    Next user in queue gets key
+           |
+           v
+    WebSocket broadcast: new key holder
+
+3.3 Backend Implementation
+--------------------------------------------------------------------------------
+- EditingKeyManager (in-memory, thread-safe)
+  - ConcurrentHashMap<documentId, userId> for key holders
+  - ConcurrentLinkedQueue<userId> per document for waiting
+  - synchronized methods for request/release/forceRelease
+  - removeUser() cleans up all docs on disconnect
+
+- EditingKeyController
+  - POST /api/documents/{id}/key/request  -> acquire or queue
+  - POST /api/documents/{id}/key/release  -> release, assign next
+  - GET  /api/documents/{id}/key/status   -> who holds it
+
+- WebSocket broadcast on /topic/document/{id}/key for status changes
+
+3.4 Frontend Implementation
+--------------------------------------------------------------------------------
+- "Request Key" button when key is free or user is queued
+- Green "Editing" chip when user holds the key (with release action)
+- Orange "Locked by X" chip when someone else holds it
+- Queue position indicator
+- Document textarea disabled when user doesn't hold key
+- Key auto-released on disconnect (backend WebSocketEventListener)
+
+================================================================================
+4. WEBSOCKET REAL-TIME COLLABORATION
+================================================================================
+
+4.1 STOMP Destinations
+--------------------------------------------------------------------------------
+
+Client sends to (via /app prefix):
+  /app/document/{id}/edit      Content changes (key holder only)
+  /app/document/{id}/cursor    Cursor position updates (any user)
+  /app/document/{id}/presence  Join/leave notifications
+
+Server broadcasts to (via /topic prefix):
+  /topic/document/{id}/edits      Incoming content from key holder
+  /topic/document/{id}/cursors    Other users' cursor positions
+  /topic/document/{id}/presence   User join/leave events
+  /topic/document/{id}/key        Key holder changes
+  /topic/document/{id}/events     RabbitMQ forwarded events (saves, etc.)
+  /topic/notifications            Global notification events
+
+4.2 Authentication
+--------------------------------------------------------------------------------
+- WebSocketAuthInterceptor intercepts STOMP CONNECT frame
+- Extracts Bearer token from native "Authorization" header
+- Validates JWT and sets UsernamePasswordAuthenticationToken as Principal
+- All @MessageMapping methods have access to Principal for user identification
+
+4.3 Message Types
+--------------------------------------------------------------------------------
+- DocumentEditMessage: documentId, userId, userName, content, title, timestamp
+- CursorMessage: documentId, userId, userName, position, selectionStart, selectionEnd
+- PresenceMessage: documentId, userId, userName, action (JOINED/LEFT)
+
+4.4 Disconnect Handling
+--------------------------------------------------------------------------------
+- WebSocketEventListener listens for SessionDisconnectEvent
+- On disconnect: releases any editing keys held by the user
+- Reassigns key to next in queue if applicable
+- Broadcasts key status change to all subscribers
+
+4.5 Frontend WebSocket Service
+--------------------------------------------------------------------------------
+- Singleton STOMP client (websocketService.js)
+- SockJS transport with auto-reconnect (5 second delay)
+- JWT token sent on CONNECT
+- Helper methods: subscribeToEdits, subscribeToCursors, subscribeToPresence,
+  subscribeToKeyChanges, sendEdit, sendCursor, sendPresence
+- Cleanup: unsubscribeFromDocument on component unmount
+
+================================================================================
+5. RABBITMQ EVENT ARCHITECTURE
+================================================================================
+
+5.1 Configuration
+--------------------------------------------------------------------------------
+- Exchange: collabeditor.exchange (Topic type)
+- Queues:
+  - document-updates (bound to "document.*")
+  - notifications (bound to "notification.*")
+- Message format: JSON via Jackson2JsonMessageConverter
+- Routing keys:
+  - document.saved
+  - document.updated
+  - notification.send
+
+5.2 Event Flow
+--------------------------------------------------------------------------------
+
+    User saves document
+           |
+           v
+    DocumentService.updateDocument()
+           |
+    +------+------+
+    |             |
+    v             v
+  Save to DB   EventPublisher.publishDocumentSaved()
+                      |
+                      v
+                RabbitMQ Exchange
+                      |
+              +-------+-------+
+              |               |
+              v               v
+    document-updates    notifications
+       queue              queue
+              |               |
+              v               v
+    EventConsumer       EventConsumer
+    (handleDocUpdate)   (handleNotification)
+              |               |
+              v               v
+    WebSocket broadcast  WebSocket broadcast
+    /topic/document/X/   /topic/notifications
+         events
+
+5.3 Benefits
+--------------------------------------------------------------------------------
+- Decouples save operation from notification delivery
+- User doesn't wait for notifications to complete
+- Scalable: can add more consumers (embedding worker in Phase 3)
+- Reliable: messages persist in queue if consumer is down
+
+================================================================================
+6. VERSION HISTORY
+================================================================================
+
+6.1 Database Schema
+--------------------------------------------------------------------------------
+
+TABLE: document_versions
+- id (BIGINT, PK, AUTO_INCREMENT)
+- document_id (BIGINT, FK -> documents.id)
+- version (INT, NOT NULL)
+- title (VARCHAR, NOT NULL)
+- content (LONGTEXT)
+- modified_by (BIGINT, FK -> users.id)
+- created_at (DATETIME)
+
+6.2 When Versions Are Created
+--------------------------------------------------------------------------------
+- Every time a user saves a document (PUT /api/documents/{id})
+- A new version number is auto-incremented (MAX + 1)
+- The snapshot captures the document's content at that point in time
+
+6.3 API Endpoints
+--------------------------------------------------------------------------------
+  GET    /api/documents/{id}/versions           List all versions (no content)
+  GET    /api/documents/{id}/versions/{v}       Get specific version with content
+  POST   /api/documents/{id}/versions/{v}/restore   Restore document to version
+  GET    /api/documents/{id}/versions/compare?versionA=X&versionB=Y   Side-by-side
+
+6.4 Restore Behavior
+--------------------------------------------------------------------------------
+- Only the document OWNER can restore
+- Restoring updates the document's current content to the version's content
+- A NEW version is created marking the restore (so history is preserved)
+- The document is never actually "rolled back" — it always moves forward
+
+6.5 Frontend Version History Page
+--------------------------------------------------------------------------------
+- Route: /documents/:id/history
+- Lists all versions in descending order (newest first)
+- Per version: version chip, title, modified by, timestamp
+- Actions:
+  - View: opens dialog showing full content of that version
+  - Compare: select two versions for side-by-side comparison
+  - Restore: confirmation dialog, creates new version
+
+================================================================================
+7. UPDATED DOCUMENT SAVE FLOW
+================================================================================
+
+    User clicks Save (or Cmd+S)
+           |
+           v
+    Frontend: documentService.update(id, {title, content})
+           |
+           v
+    Backend: DocumentService.updateDocument()
+           |
+    +------+------+------+
+    |             |            |
+    v             v            v
+  Save to DB   VersionService  EventPublisher
+  (document     .saveVersion()  .publishDocumentSaved()
+   table)       (snapshot)      (RabbitMQ)
+                                     |
+                                     v
+                              EventConsumer -> WebSocket
+           |
+           v
+    Frontend: websocketService.sendEdit(id, content, title)
+           |
+           v
+    Backend: CollaborationController.handleEdit()
+           |
+           v
+    Broadcast to /topic/document/{id}/edits
+           |
+           v
+    Other connected users see the update in real-time
+
+================================================================================
+8. NEW BACKEND PACKAGES
+================================================================================
+
+websocket/
+├── WebSocketAuthInterceptor.java   JWT auth on CONNECT
+├── CollaborationController.java    @MessageMapping handlers
+├── EditingKeyManager.java          In-memory key management
+├── WebSocketEventListener.java     Disconnect handling
+├── DocumentEditMessage.java        Edit payload DTO
+├── CursorMessage.java              Cursor position DTO
+└── PresenceMessage.java            Join/leave DTO
+
+rabbitmq/
+├── RabbitMQConfig.java             Exchange, queues, bindings
+├── DocumentEvent.java              Event payload DTO
+├── EventPublisher.java             Publishes to RabbitMQ
+└── EventConsumer.java              Listens and forwards to WebSocket
+
+config/
+└── WebSocketConfig.java            STOMP/SockJS configuration
+
+================================================================================
+9. NEW FRONTEND FILES
+================================================================================
+
+services/
+├── websocketService.js             STOMP client singleton
+├── editingKeyService.js            Key request/release API
+└── versionService.js               Version history API
+
+pages/
+├── Editor.js                       Updated with key-based editing + WebSocket
+└── VersionHistory.js               New page for version management
+
+================================================================================
+10. HOW TO RUN (UPDATED)
+================================================================================
+
+Prerequisites (same as Phase 1 plus):
+- Docker Desktop running (for MySQL + RabbitMQ)
+
+Steps:
+
+1. Start infrastructure:
+   docker-compose up -d
+   (Starts both MySQL and RabbitMQ)
+
+2. Start backend:
+   cd backend
+   mvn spring-boot:run
+
+3. Start frontend:
+   cd frontend
+   npm install
+   npm start
+
+4. Open browser at http://localhost:3000
+
+5. RabbitMQ Management UI: http://localhost:15672
+   (user: collabuser, pass: collabpass)
+
+================================================================================
+11. TESTING REAL-TIME COLLABORATION
+================================================================================
+
+To test key-based editing:
+1. Open the app in two browsers (or incognito) with different accounts
+2. Both navigate to the same document
+3. User A clicks "Request Key" -> gets editing rights
+4. User B sees "Locked by User A"
+5. User A edits and saves -> User B sees changes in real-time
+6. User A releases key -> User B can now request it
+
+To test version history:
+1. Make several saves to a document
+2. Click the History icon in the editor toolbar
+3. View individual versions, compare two versions, or restore an old one
+
+================================================================================
+12. KNOWN LIMITATIONS
+================================================================================
+
+- Key management is in-memory (lost on server restart)
+  -> Future: persist to Redis for multi-instance support
+- No cursor position visualization (backend supports it, frontend pending)
+- No diff highlighting in version compare (side-by-side text only)
+- No notification badges (events are broadcast but not displayed)
+- No auto-release timeout (key holder must explicitly release or disconnect)
+- Single server only (no horizontal scaling yet, needs Redis-backed broker)
+
+================================================================================
+13. WHAT'S NEXT (PHASE 3)
+================================================================================
+
+- AI integration (OpenAI GPT-4.1 / Gemini)
+- Embedding generation pipeline
+- ChromaDB vector database
+- Document Q&A (RAG)
+- Document summarization
+- Semantic search
+
+================================================================================
+END OF DOCUMENT
+================================================================================

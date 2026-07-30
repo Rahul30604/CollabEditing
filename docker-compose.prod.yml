@@ -1,0 +1,163 @@
+version: '3.8'
+
+services:
+  # ============ Infrastructure ============
+
+  mysql:
+    image: mysql:8.0
+    container_name: collabeditor-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-collabeditor}
+      MYSQL_USER: ${MYSQL_USER:-collabuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-collabpass}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - collabeditor-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: collabeditor-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-collabuser}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-collabpass}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - collabeditor-net
+
+  chromadb:
+    image: chromadb/chroma:0.5.0
+    container_name: collabeditor-chromadb
+    restart: always
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - collabeditor-net
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: collabeditor-redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - collabeditor-net
+
+  # ============ Application ============
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: collabeditor-backend
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/collabeditor?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-collabuser}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-collabpass}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-collabuser}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASS:-collabpass}
+      SPRING_DATA_REDIS_HOST: redis
+      APP_AI_OPENAI_API_KEY: ${OPENAI_API_KEY}
+      APP_AI_CHROMADB_BASE_URL: http://chromadb:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - collabeditor-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: collabeditor-frontend
+    restart: always
+    ports:
+      - "80:80"
+    environment:
+      REACT_APP_API_URL: http://localhost:8080/api
+    depends_on:
+      - backend
+    networks:
+      - collabeditor-net
+
+  # ============ Monitoring ============
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: collabeditor-prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    depends_on:
+      - backend
+    networks:
+      - collabeditor-net
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: collabeditor-grafana
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - collabeditor-net
+
+volumes:
+  mysql_data:
+  rabbitmq_data:
+  chroma_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  collabeditor-net:
+    driver: bridge
