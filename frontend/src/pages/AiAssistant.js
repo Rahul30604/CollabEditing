@@ -47,14 +47,18 @@ const AiAssistant = () => {
     ]);
 
     try {
-      const response = await aiService.askQuestion(id, currentQuestion);
+      // Get draft content from sessionStorage
+      const draft = sessionStorage.getItem(`draft_${id}`);
+      const draftContent = draft ? JSON.parse(draft).content : null;
+
+      const response = await aiService.askQuestion(id, currentQuestion, draftContent);
       setConversations((prev) => [
         ...prev,
         { type: 'answer', text: response.answer, sources: response.sources },
       ]);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to get AI response');
-      setConversations((prev) => prev.slice(0, -1)); // Remove the question on error
+      setConversations((prev) => prev.slice(0, -1));
     } finally {
       setLoading(false);
     }

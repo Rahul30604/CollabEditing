@@ -269,7 +269,22 @@ Only one person can edit at a time — this prevents conflicts in real-time coll
 1. Edit Document — Type anything, your changes sync in real-time to all collaborators
 2. Save — Press Cmd/Ctrl+S to save (creates a version snapshot)
 3. Version History — Click the clock icon to view, compare, or restore past versions
-4. AI Assistant — Click the sparkle icon to ask questions about the document
+4. AI Assistant — Click the sparkle icon to ask questions about this document
+
+   Example: Below is some sample data in this document:
+
+   Student Results:
+   | Name    | Maths | Science | English |
+   | Alice   |  85   |   92    |   78    |
+   | Bob     |  72   |   68    |   81    |
+   | Charlie |  91   |   88    |   95    |
+   | Diana   |  63   |   75    |   70    |
+
+   Now click the sparkle icon and ask: "What is the average maths score?"
+   The AI will read this document and respond: "The average maths score is 77.75"
+
+   Try it! Ask anything about the content in this document.
+
 5. Summarize — Get an AI-generated summary of the entire document
 6. Semantic Search — Use "Search" in the navbar to find content across all your documents
 7. Share — Click "+ Add People" to invite collaborators by email (Editor or Viewer role)

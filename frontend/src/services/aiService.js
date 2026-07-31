@@ -1,8 +1,10 @@
 import api from './api';
 
 const aiService = {
-  askQuestion: async (documentId, question) => {
-    const response = await api.post(`/documents/${documentId}/ask`, { question });
+  askQuestion: async (documentId, question, draftContent = null) => {
+    const body = { question };
+    if (draftContent) body.draftContent = draftContent;
+    const response = await api.post(`/documents/${documentId}/ask`, body);
     return response.data;
   },
 

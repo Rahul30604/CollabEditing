@@ -26,32 +26,38 @@ public class RagService {
 
     /**
      * Answer a question about a specific document using RAG.
+     * If draftContent is provided, use it as primary context (unsaved state).
      */
-    @Cacheable(value = "ai-responses", key = "#documentId + ':ask:' + #question")
-    public AiResponse askQuestion(Long documentId, String question) {
-        // 1. Generate embedding for the question
-        List<Double> queryEmbedding = embeddingService.generateQueryEmbedding(question);
+    @Cacheable(value = "ai-responses", key = "#documentId + ':ask:' + #question", condition = "#draftContent == null")
+    public AiResponse askQuestion(Long documentId, String question, String draftContent) {
+        String context;
 
-        // 2. Search ChromaDB for relevant chunks (scoped to this document)
-        List<ChromaQueryResult> results = chromaDbClient.query(
-                queryEmbedding,
-                aiConfig.getEmbedding().getTopK(),
-                Map.of("document_id", documentId.toString())
-        );
+        if (draftContent != null && !draftContent.isBlank()) {
+            // Use draft content directly — no need for embedding search
+            context = draftContent;
+        } else {
+            // Fall back to saved/indexed content via ChromaDB
+            List<Double> queryEmbedding = embeddingService.generateQueryEmbedding(question);
 
-        if (results.isEmpty()) {
-            return AiResponse.builder()
-                    .answer("I don't have enough context from this document to answer your question. Make sure the document has been saved at least once.")
-                    .sources(List.of())
-                    .build();
+            List<ChromaQueryResult> results = chromaDbClient.query(
+                    queryEmbedding,
+                    aiConfig.getEmbedding().getTopK(),
+                    Map.of("document_id", documentId.toString())
+            );
+
+            if (results.isEmpty()) {
+                return AiResponse.builder()
+                        .answer("I don't have enough context from this document to answer your question. Make sure the document has been saved at least once.")
+                        .sources(List.of())
+                        .build();
+            }
+
+            context = results.stream()
+                    .map(ChromaQueryResult::getDocument)
+                    .collect(Collectors.joining("\n\n---\n\n"));
         }
 
-        // 3. Build context from retrieved chunks
-        String context = results.stream()
-                .map(ChromaQueryResult::getDocument)
-                .collect(Collectors.joining("\n\n---\n\n"));
-
-        // 4. Build prompt
+        // Build prompt
         String systemPrompt = """
                 You are an AI assistant helping users understand a document. 
                 Answer questions based ONLY on the provided document context below.
@@ -61,19 +67,12 @@ public class RagService {
                 DOCUMENT CONTEXT:
                 """ + context;
 
-        // 5. Call LLM
+        // Call LLM
         String answer = openAiClient.chatCompletion(systemPrompt, question);
-
-        // 6. Build response with sources
-        List<String> sources = results.stream()
-                .map(r -> r.getDocument().length() > 100
-                        ? r.getDocument().substring(0, 100) + "..."
-                        : r.getDocument())
-                .toList();
 
         return AiResponse.builder()
                 .answer(answer)
-                .sources(sources)
+                .sources(List.of())
                 .build();
     }
 

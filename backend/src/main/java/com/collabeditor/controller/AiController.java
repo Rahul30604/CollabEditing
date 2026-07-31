@@ -36,7 +36,7 @@ public class AiController {
         // Verify user has access to this document
         verifyAccess(documentId, userDetails.getId());
 
-        AiResponse response = ragService.askQuestion(documentId, request.getQuestion());
+        AiResponse response = ragService.askQuestion(documentId, request.getQuestion(), request.getDraftContent());
         return ResponseEntity.ok(response);
     }
 
